@@ -1,29 +1,19 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.20;
 
-import { Initializable } from
-    '@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol';
-import { UUPSUpgradeable } from
-    '@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol';
-import { ERC20Upgradeable } from
-    '@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol';
-import { ReentrancyGuardUpgradeable } from
-    '@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol';
-import { PausableUpgradeable } from
-    '@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol';
+import { Initializable } from '@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol';
+import { UUPSUpgradeable } from '@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol';
+import { ERC20Upgradeable } from '@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol';
+import { ReentrancyGuardUpgradeable } from '@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol';
+import { PausableUpgradeable } from '@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol';
+import { OwnableUpgradeable } from '@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol';
 import { Address } from '@openzeppelin/contracts/utils/Address.sol';
-import { IERC20Metadata } from
-    '@openzeppelin/contracts/interfaces/IERC20Metadata.sol';
+import { IERC20Metadata } from '@openzeppelin/contracts/interfaces/IERC20Metadata.sol';
 import { IERC20 } from '@openzeppelin/contracts/interfaces/IERC20.sol';
-import { SafeERC20 } from
-    '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
-import { OwnableUpgradeable } from
-    '@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol';
+import { SafeERC20 } from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 import { IERC20 } from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
-import { SafeERC20 } from
-    '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
-import { RangeProtocolJOJOVaultStorage } from
-    './RangeProtocolJOJOVaultStorage.sol';
+import { SafeERC20 } from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
+import { RangeProtocolJOJOVaultStorage } from './RangeProtocolJOJOVaultStorage.sol';
 import { IDealer } from './interfaces/JOJO/IDealer.sol';
 import { VaultErrors } from './errors/VaultErrors.sol';
 import { FullMath } from './libraries/FullMath.sol';
@@ -36,7 +26,7 @@ import { Test, console2 } from 'forge-std/Test.sol';
  * {depositToken} when opening a vault position and get vault shares that represent
  * their ownership of the vault. The vault manager is a linked signer of the
  * vault and can manage vault's assets off-chain to open long/short perpetual
- * positions on the vertex protocol.
+ * positions on the JOJO protocol.
  *
  * The LP ownership of the vault is represented by the fungible ERC20 token minted
  * by the vault to LPs.
@@ -63,17 +53,9 @@ contract RangeProtocolJOJOVault is
     OwnableUpgradeable,
     ERC20Upgradeable,
     PausableUpgradeable,
-    RangeProtocolJOJOVaultStorage,
-    Test
+    RangeProtocolJOJOVaultStorage
 {
     using SafeERC20 for IERC20;
-
-    event OperatorStatusChanged(address operator, bool status);
-    event Minted(address user, uint256 shares, uint256 amount);
-    event Burned(address user, uint256 shares, uint256 amount);
-    event LiquidityAdded(uint256 amount);
-    event WithdrawRequested();
-    event WithdrawExecuted();
 
     uint256 public constant MAX_MANAGING_FEE = 1000;
 
@@ -87,14 +69,7 @@ contract RangeProtocolJOJOVault is
      * @param _name name of vault's ERC20 fungible token.
      * @param _symbol symbol of vault's ERC20 fungible token.
      */
-    function initialize(
-        address _owner,
-        string memory _name,
-        string memory _symbol
-    )
-        external
-        initializer
-    {
+    function initialize(address _owner, string memory _name, string memory _symbol) external override initializer {
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
         __Ownable_init(_owner);
@@ -103,19 +78,23 @@ contract RangeProtocolJOJOVault is
 
         dealer = IDealer(0xcDf9eED57Fe8dFaaCeCf40699E5861517143bcC7);
         depositToken = IERC20(0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8);
-        ownerFee = 0;
+
+        // default managing fee is set to 0.1%.
+        _setManagingFee(100);
     }
 
     /**
      * @notice sets/unsets the operator for the vault which can open positions on the JOJO exchange
      * on behalf of the vault.
      * @param _operator address of the operator.
-     * @param status set or unset the operator.
      */
-    function setOperator(address _operator, bool status) external onlyOwner {
+    function setOperator(address _operator) external override onlyOwner {
+        dealer.setOperator(operator, false);
+        emit OperatorStatusChanged(_operator, false);
+
         operator = _operator;
-        dealer.setOperator(operator, status);
-        emit OperatorStatusChanged(_operator, status);
+        dealer.setOperator(_operator, true);
+        emit OperatorStatusChanged(_operator, true);
     }
 
     /**
@@ -123,19 +102,12 @@ contract RangeProtocolJOJOVault is
      * @param amount the amount of {depositToken} to deposit.
      * @return shares the amount of vault shares minted.
      */
-    function mint(uint256 amount)
-        external
-        nonReentrant
-        whenNotPaused
-        returns (uint256 shares)
-    {
+    function mint(uint256 amount) external override nonReentrant whenNotPaused returns (uint256 shares) {
         if (amount == 0) {
             revert VaultErrors.ZeroDepositAmount();
         }
         uint256 totalSupply = totalSupply();
-        shares = totalSupply != 0
-            ? FullMath.mulDivRoundingUp(amount, totalSupply, getUnderlyingBalance())
-            : amount;
+        shares = totalSupply != 0 ? FullMath.mulDivRoundingUp(amount, totalSupply, getUnderlyingBalance()) : amount;
         _mint(msg.sender, shares);
         depositToken.safeTransferFrom(msg.sender, address(this), amount);
         emit Minted(msg.sender, shares, amount);
@@ -151,20 +123,21 @@ contract RangeProtocolJOJOVault is
         uint256 minAmount
     )
         external
+        override
         nonReentrant
-        whenNotPaused
         returns (uint256 amount)
     {
         if (shares == 0) revert VaultErrors.ZeroSharesAmount();
         amount = shares * getUnderlyingBalance() / totalSupply();
         _burn(msg.sender, shares);
 
-        _netManagingFee(amount);
+        _applyManagingFee(amount);
+        amount = _netManagingFee(amount);
         if (amount < minAmount) {
             revert VaultErrors.AmountIsLessThanMinAmount();
         }
         if (amount > depositToken.balanceOf(address(this))) {
-            revert VaultErrors.NotEnoughPassiveBalanceForWithdrawal();
+            revert VaultErrors.NotEnoughBalanceInVault();
         }
         depositToken.transfer(msg.sender, amount);
         emit Burned(msg.sender, shares, amount);
@@ -175,7 +148,7 @@ contract RangeProtocolJOJOVault is
      * @param amount the amount of liquidity to add to JOJO.
      * only owner can call this function.
      */
-    function addLiquidity(uint256 amount) external onlyOwner {
+    function addLiquidity(uint256 amount) external override onlyOwner {
         if (amount == 0) {
             revert VaultErrors.ZeroLiquidityAmount();
         }
@@ -190,33 +163,36 @@ contract RangeProtocolJOJOVault is
      * @param amount the amount of margin to withdraw from JOJO.
      * only owner can call this function.
      */
-    function requestWithdraw(uint256 amount) external onlyOwner {
+    function requestWithdraw(uint256 amount) external override onlyOwner {
         if (amount == 0) {
             revert VaultErrors.ZeroLiquidityAmount();
         }
         dealer.requestWithdraw(amount, 0);
-        emit WithdrawRequested();
+        emit WithdrawRequested(amount);
     }
 
     /**
      * @notice executes withdraw and transfers margin/PnL from JOJO to the vault.
-     * @param amount amount of margin/PnL to withdraw.
      * only manager can call this function.
      */
-    function executeWithdraw(uint256 amount) external onlyOwner {
-        if (amount == 0) {
-            revert VaultErrors.ZeroLiquidityAmount();
+    function executeWithdraw() external override onlyOwner {
+        (,, uint256 pendingPrimaryWithdraw,,) = dealer.getCreditOf(address(this));
+        if (pendingPrimaryWithdraw != 0) {
+            dealer.executeWithdraw(address(this), false);
+            emit WithdrawExecuted(pendingPrimaryWithdraw);
         }
-        (,, uint256 pendingPrimaryWithdraw,,) =
-            dealer.getCreditOf(address(this));
-        if (amount > pendingPrimaryWithdraw) {
-            revert VaultErrors.NotEnoughRequestedForWithdrawal();
-        }
-        dealer.executeWithdraw(address(this), false);
-        emit WithdrawExecuted();
     }
 
-    function collectOwnerFee() external onlyOwner {
+    /**
+     * @notice allows owner to change owner fee.
+     * @param _managingFee owner fee to set to.
+     * only owner can call this function.
+     */
+    function setManagingFee(uint256 _managingFee) external override onlyOwner {
+        _setManagingFee(_managingFee);
+    }
+
+    function collectManagingFee() external override onlyOwner {
         uint256 _ownerBalance = ownerBalance;
         ownerBalance = 0;
         depositToken.transfer(msg.sender, _ownerBalance);
@@ -243,13 +219,12 @@ contract RangeProtocolJOJOVault is
      * @param shares the amount of shares.
      * @return amount the amount of underlying balance redeemable against the {shares}.
      */
-    function getUnderlyingBalanceByShares(uint256 shares)
-        public
-        view
-        returns (uint256 amount)
-    {
+    function getUnderlyingBalanceByShares(uint256 shares) public view returns (uint256 amount) {
         uint256 _totalSupply = totalSupply();
         if (_totalSupply != 0) {
+            if (shares > _totalSupply) {
+                revert VaultErrors.InvalidShareAmount();
+            }
             amount = shares * getUnderlyingBalance() / _totalSupply;
             amount = _netManagingFee(amount);
         }
@@ -260,12 +235,8 @@ contract RangeProtocolJOJOVault is
      * @return amountAfterFee the {depositToken} amount redeemable after
      * the managing fee is deducted.
      */
-    function _netManagingFee(uint256 amount)
-        private
-        view
-        returns (uint256 amountAfterFee)
-    {
-        uint256 fee = amount * ownerFee / 10_000;
+    function _netManagingFee(uint256 amount) private view returns (uint256 amountAfterFee) {
+        uint256 fee = amount * managingFee / 10_000;
         amountAfterFee = amount - fee;
     }
 
@@ -274,7 +245,19 @@ contract RangeProtocolJOJOVault is
      * @param amount the amount to apply managing fee upon.
      */
     function _applyManagingFee(uint256 amount) private {
-        ownerBalance += amount * ownerFee / 10_000;
+        ownerBalance += amount * managingFee / 10_000;
+    }
+
+    /**
+     * @notice sets managing fee to a maximum of {MAX_OWNER_FEE}.
+     */
+    function _setManagingFee(uint256 _managingFee) private {
+        if (_managingFee > MAX_MANAGING_FEE) {
+            revert VaultErrors.InvalidManagingFee();
+        }
+        managingFee = _managingFee;
+
+        emit ManagingFeeSet(_managingFee);
     }
 
     /**

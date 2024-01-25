@@ -7,12 +7,13 @@ import { RangeProtocolJOJOVault } from '../src/RangeProtocolJOJOVault.sol';
 
 import { IERC20 } from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 
-contract mint is Script {
+contract burn is Script {
     function run() public {
         uint256 pk = vm.envUint('PK');
         vm.startBroadcast(pk);
-        RangeProtocolJOJOVault vault = RangeProtocolJOJOVault(0xf32d1cD5b42e4a476F0F6BB83695b8d3585e7020);
-        vault.transferOwnership(0x2B986A355F5676F77687A84b3209Af8654b2C6aa);
+        RangeProtocolJOJOVault vault = RangeProtocolJOJOVault(0x0e3B9E7CfC71EE01CE425D7E82139a8D12058968);
+        console2.log(vault.getUnderlyingBalance());
+        vault.burn(vault.balanceOf(vault.owner()), 0);
         vm.stopBroadcast();
     }
 }
